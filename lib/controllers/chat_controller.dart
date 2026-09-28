@@ -6,10 +6,9 @@ import '../services/chat_settings.dart';
 
 class ChatController extends ChangeNotifier {
   ChatController({
-    required ChatSettings settings,
+    required this._settings,
     ChatApi? api,
-  })  : _settings = settings,
-        _api = api ?? ChatApi();
+  }) : _api = api ?? ChatApi();
 
   final ChatApi _api;
   final List<ChatMessage> _messages = [];
