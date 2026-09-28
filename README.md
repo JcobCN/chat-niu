@@ -12,7 +12,7 @@ A lightweight Flutter chat client with a ChatGPT-style interface, streaming Open
 
 ## Getting started
 
-1. Install Flutter 3.35 or newer and run `flutter pub get`.
+1. Install Flutter 3.44 or newer and run `flutter pub get`.
 2. Generate the native platform wrappers from the project root:
 
    ```sh
