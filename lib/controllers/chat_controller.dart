@@ -14,6 +14,7 @@ class ChatController extends ChangeNotifier {
   final List<ChatMessage> _messages = [];
   ChatSettings _settings;
   bool _isBusy = false;
+  bool _stopRequested = false;
 
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   ChatSettings get settings => _settings;
@@ -24,10 +25,16 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void cancelStream() {
+    if (!_isBusy) return;
+    _stopRequested = true;
+  }
+
   Future<void> sendMessage(String text) async {
     final prompt = text.trim();
     if (prompt.isEmpty || _isBusy) return;
 
+    _stopRequested = false;
     final userMessage = ChatMessage(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
       role: ChatRole.user,
@@ -57,6 +64,9 @@ class ChatController extends ChangeNotifier {
         settings: _settings,
         messages: conversation,
         onDelta: (delta) {
+          if (_stopRequested) {
+            throw const ChatApiException('已取消生成。');
+          }
           final index = _messages.indexWhere((message) => message.id == assistantId);
           if (index == -1) return;
           _messages[index] = _messages[index].copyWith(
@@ -66,12 +76,17 @@ class ChatController extends ChangeNotifier {
         },
       );
     } catch (error) {
+      final isCancelled = _stopRequested;
       final index = _messages.indexWhere((message) => message.id == assistantId);
       if (index != -1) {
-        _messages[index] = _messages[index].copyWith(
-          content: '抱歉，回复失败了。\n\n$error',
-          isError: true,
-        );
+        if (isCancelled) {
+          _messages[index] = _messages[index].copyWith(isStreaming: false);
+        } else {
+          _messages[index] = _messages[index].copyWith(
+            content: '抱歉，回复失败了。\n\n$error',
+            isError: true,
+          );
+        }
       }
     } finally {
       final index = _messages.indexWhere((message) => message.id == assistantId);

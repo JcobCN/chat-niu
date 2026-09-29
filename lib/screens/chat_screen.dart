@@ -12,6 +12,21 @@ import '../services/chat_settings.dart';
 
 const _green = Color(0xFF10A37F);
 
+// Light-theme colors
+const _lightSurface = Color(0xFFFFFFFF);
+const _lightBorder = Color(0xFFE5E7E9);
+const _lightUserBubble = Color(0xFFE9F4F0);
+const _lightCodeBg = Color(0xFFF0F1F2);
+
+// Dark-theme colors
+const _darkSurface = Color(0xFF1E2328);
+const _darkBorder = Color(0xFF2A3036);
+const _darkUserBubble = Color(0xFF1B3A31);
+const _darkCodeBg = Color(0xFF252A2F);
+
+bool _isDark(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark;
+
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
@@ -29,13 +44,24 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _voiceActive = false;
   bool _startingSpeech = false;
   bool _showSpeechError = false;
+  bool _isNearBottom = true;
+  int _speechRestartAttempts = 0;
   String _speechBaseText = '';
   String _speechDraft = '';
+
+  static const _maxSpeechRestartAttempts = 3;
 
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScrollChanged);
     unawaited(_initializeSpeech());
+  }
+
+  void _onScrollChanged() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    _isNearBottom = position.pixels >= position.maxScrollExtent - 120;
   }
 
   Future<void> _initializeSpeech() async {
@@ -61,6 +87,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onSpeechStatus(String status) {
     if (status == 'listening') {
       if (mounted) setState(() => _showSpeechError = false);
+      _speechRestartAttempts = 0;
       _restartTimer?.cancel();
     } else if (_voiceActive && (status == 'notListening' || status == 'done')) {
       _commitSpeechDraft();
@@ -70,6 +97,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _scheduleSpeechRestart() {
     if (!_voiceActive) return;
+    if (_speechRestartAttempts >= _maxSpeechRestartAttempts) {
+      if (mounted) setState(() => _showSpeechError = true);
+      return;
+    }
     _restartTimer?.cancel();
     _restartTimer = Timer(const Duration(milliseconds: 450), () {
       if (_voiceActive && mounted) unawaited(_startSpeechSession());
@@ -79,6 +110,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _startSpeechSession() async {
     if (!_voiceActive || _startingSpeech || _speech.isListening) return;
     _startingSpeech = true;
+    _speechRestartAttempts++;
     try {
       await _speech.listen(
         onResult: (result) {
@@ -180,18 +212,25 @@ class _ChatScreenState extends State<ChatScreen> {
     _speechBaseText = '';
     _speechDraft = '';
     _inputFocus.unfocus();
+    _isNearBottom = true;
     unawaited(context.read<ChatController>().sendMessage(text));
-    _scrollToBottom();
+    _scrollToBottom(force: true, animate: true);
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool force = false, bool animate = false}) {
+    if (!force && !_isNearBottom) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 260),
-        curve: Curves.easeOutCubic,
-      );
+      final target = _scrollController.position.maxScrollExtent;
+      if (animate) {
+        _scrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _scrollController.jumpTo(target);
+      }
     });
   }
 
@@ -230,7 +269,9 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final chat = context.watch<ChatController>();
-    if (chat.messages.isNotEmpty) _scrollToBottom();
+    if (chat.messages.isNotEmpty && _isNearBottom) {
+      _scrollToBottom();
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -297,7 +338,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           : '正在聆听 · 停顿后会自动续听，点麦克风结束',
                       style: TextStyle(
                         fontSize: 12,
-                        color: _showSpeechError ? Colors.deepOrange : Colors.black54,
+                        color: _showSpeechError ? Colors.deepOrange : null,
                       ),
                     ),
                   ),
@@ -312,6 +353,7 @@ class _ChatScreenState extends State<ChatScreen> {
             isBusy: chat.isBusy,
             onVoiceTap: _toggleVoice,
             onSend: _send,
+            onStop: chat.cancelStream,
           ),
         ],
       ),
@@ -331,6 +373,10 @@ class _WelcomeView extends StatelessWidget {
       '帮我写一封礼貌、简洁的邮件',
       '给我一些周末放松的灵感',
     ];
+    final dark = _isDark(context);
+    final cardBorder = Border.all(color: dark ? _darkBorder : _lightBorder);
+    final cardBg = dark ? _darkSurface : const Color(0xFFFFFFFF);
+    final muted = dark ? Colors.white54 : Colors.black54;
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 24, 24, 36),
@@ -357,9 +403,9 @@ class _WelcomeView extends StatelessWidget {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 9),
-              const Text(
+              Text(
                 '输入消息，或点麦克风开始语音输入',
-                style: TextStyle(color: Colors.black54),
+                style: TextStyle(color: muted),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 28),
@@ -367,7 +413,7 @@ class _WelcomeView extends StatelessWidget {
                 (suggestion) => Padding(
                   padding: const EdgeInsets.only(bottom: 9),
                   child: Material(
-                    color: Colors.white,
+                    color: cardBg,
                     borderRadius: BorderRadius.circular(16),
                     child: InkWell(
                       onTap: () => onSuggestion(suggestion),
@@ -380,7 +426,7 @@ class _WelcomeView extends StatelessWidget {
                         ),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFFE8EAED)),
+                          border: cardBorder,
                         ),
                         child: Text(suggestion),
                       ),
@@ -404,22 +450,27 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isUser = message.role == ChatRole.user;
+    final dark = _isDark(context);
     if (!isUser && message.content.isEmpty && message.isStreaming) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 16),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
         child: Row(
           children: [
-            SizedBox(
+            const SizedBox(
               width: 17,
               height: 17,
               child: CircularProgressIndicator(strokeWidth: 2, color: _green),
             ),
-            SizedBox(width: 12),
-            Text('正在思考…', style: TextStyle(color: Colors.black54)),
+            const SizedBox(width: 12),
+            Text('正在思考…', style: TextStyle(color: dark ? Colors.white54 : Colors.black54)),
           ],
         ),
       );
     }
+
+    final userBg = dark ? _darkUserBubble : _lightUserBubble;
+    final codeBg = dark ? _darkCodeBg : _lightCodeBg;
+    final borderSide = BorderSide(color: dark ? _darkBorder : _lightBorder);
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -434,14 +485,14 @@ class _MessageBubble extends StatelessWidget {
         ),
         decoration: isUser
             ? BoxDecoration(
-                color: const Color(0xFFE9F4F0),
+                color: userBg,
                 borderRadius: BorderRadius.circular(19),
               )
             : null,
         child: isUser
             ? SelectableText(
                 message.content,
-                style: const TextStyle(fontSize: 15, height: 1.48),
+                style: TextStyle(fontSize: 15, height: 1.48, color: dark ? Colors.white : null),
               )
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -451,17 +502,21 @@ class _MessageBubble extends StatelessWidget {
                     selectable: true,
                     styleSheet: MarkdownStyleSheet(
                       p: TextStyle(
-                        color: message.isError ? Colors.red.shade700 : null,
+                        color: message.isError
+                            ? (dark ? Colors.red.shade300 : Colors.red.shade700)
+                            : null,
                         fontSize: 15,
                         height: 1.58,
                       ),
-                      code: const TextStyle(
+                      code: TextStyle(
                         fontFamily: 'monospace',
-                        backgroundColor: Color(0xFFF0F1F2),
+                        backgroundColor: codeBg,
+                        color: dark ? Colors.green.shade200 : null,
                       ),
                       codeblockDecoration: BoxDecoration(
-                        color: const Color(0xFFF0F1F2),
+                        color: codeBg,
                         borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: dark ? _darkBorder : _lightBorder, width: 0.5),
                       ),
                       blockquoteDecoration: const BoxDecoration(
                         border: Border(left: BorderSide(color: _green, width: 3)),
@@ -494,6 +549,7 @@ class _Composer extends StatelessWidget {
     required this.isBusy,
     required this.onVoiceTap,
     required this.onSend,
+    required this.onStop,
   });
 
   final TextEditingController controller;
@@ -503,18 +559,20 @@ class _Composer extends StatelessWidget {
   final bool isBusy;
   final VoidCallback onVoiceTap;
   final VoidCallback onSend;
+  final VoidCallback onStop;
 
   @override
   Widget build(BuildContext context) {
+    final dark = _isDark(context);
     return SafeArea(
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
         child: Container(
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: dark ? _darkSurface : _lightSurface,
             borderRadius: BorderRadius.circular(27),
-            border: Border.all(color: const Color(0xFFE5E7E9)),
+            border: Border.all(color: dark ? _darkBorder : _lightBorder),
             boxShadow: const [
               BoxShadow(color: Color(0x0C000000), blurRadius: 12, offset: Offset(0, 3)),
             ],
@@ -554,9 +612,15 @@ class _Composer extends StatelessWidget {
                       onTap: onVoiceTap,
                     ),
                     const SizedBox(width: 5),
-                    _SendButton(
-                      enabled: !isBusy,
-                      onPressed: onSend,
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: controller,
+                      builder: (context, value, _) {
+                        if (isBusy) return _StopButton(onPressed: onStop);
+                        return _SendButton(
+                          enabled: value.text.trim().isNotEmpty,
+                          onPressed: onSend,
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -582,6 +646,7 @@ class _VoiceButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = _isDark(context);
     return Semantics(
       button: true,
       label: active ? '停止语音输入' : '开始语音输入',
@@ -600,7 +665,7 @@ class _VoiceButton extends StatelessWidget {
             duration: const Duration(milliseconds: 220),
             child: Icon(
               active ? Icons.mic_rounded : Icons.mic_none_rounded,
-              color: active ? const Color(0xFFE5484D) : Colors.black54,
+              color: active ? const Color(0xFFE5484D) : (dark ? Colors.white54 : Colors.black54),
             ),
           ),
         ),
@@ -633,6 +698,29 @@ class _SendButton extends StatelessWidget {
   }
 }
 
+class _StopButton extends StatelessWidget {
+  const _StopButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: _green,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onPressed,
+        child: const SizedBox(
+          width: 42,
+          height: 42,
+          child: Icon(Icons.stop_rounded, color: Colors.white, size: 22),
+        ),
+      ),
+    );
+  }
+}
+
 class SettingsSheet extends StatefulWidget {
   const SettingsSheet({super.key, required this.settings});
 
@@ -647,6 +735,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
   late final _apiKeyController = TextEditingController(text: widget.settings.apiKey);
   late final _modelController = TextEditingController(text: widget.settings.model);
   bool _hideKey = true;
+  late int _themeMode = widget.settings.themeMode;
 
   @override
   void dispose() {
@@ -669,18 +758,21 @@ class _SettingsSheetState extends State<SettingsSheet> {
       baseUrl: url,
       apiKey: _apiKeyController.text.trim(),
       model: model,
+      themeMode: _themeMode,
     ));
   }
 
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.viewInsetsOf(context).bottom;
+    final dark = _isDark(context);
+    final containerBg = dark ? const Color(0xFF1A1D22) : Colors.white;
     return Padding(
       padding: EdgeInsets.only(bottom: bottom),
       child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        decoration: BoxDecoration(
+          color: containerBg,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         ),
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(22, 12, 22, 24),
@@ -693,17 +785,31 @@ class _SettingsSheetState extends State<SettingsSheet> {
                   width: 38,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.black12,
+                    color: dark ? Colors.white24 : Colors.black12,
                     borderRadius: BorderRadius.circular(4),
                   ),
                 ),
               ),
               const SizedBox(height: 20),
-              Text('连接设置', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+              Text('外观',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 10),
+              SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: 0, label: Text('自动')),
+                  ButtonSegment(value: 1, label: Text('浅色')),
+                  ButtonSegment(value: 2, label: Text('深色')),
+                ],
+                selected: {_themeMode},
+                onSelectionChanged: (selected) => setState(() => _themeMode = selected.first),
+              ),
+              const SizedBox(height: 24),
+              Text('连接设置',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
               const SizedBox(height: 6),
-              const Text(
+              Text(
                 '支持 OpenAI 兼容的聊天补全接口。API Key 仅保存在本机。',
-                style: TextStyle(color: Colors.black54, fontSize: 13),
+                style: TextStyle(color: dark ? Colors.white54 : Colors.black54, fontSize: 13),
               ),
               const SizedBox(height: 20),
               TextField(
