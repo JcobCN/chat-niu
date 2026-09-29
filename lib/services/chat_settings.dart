@@ -28,6 +28,7 @@ class ChatSettings {
 class SettingsStore {
   static const _baseUrlKey = 'chat.baseUrl';
   static const _apiKeyKey = 'chat.apiKey';
+  static const _modelKey = 'chat.model';
   static const _themeModeKey = 'chat.themeMode';
 
   static Future<ChatSettings> load() async {

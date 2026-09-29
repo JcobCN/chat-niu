@@ -470,7 +470,6 @@ class _MessageBubble extends StatelessWidget {
 
     final userBg = dark ? _darkUserBubble : _lightUserBubble;
     final codeBg = dark ? _darkCodeBg : _lightCodeBg;
-    final borderSide = BorderSide(color: dark ? _darkBorder : _lightBorder);
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
