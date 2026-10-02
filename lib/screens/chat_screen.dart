@@ -45,6 +45,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _startingSpeech = false;
   bool _showSpeechError = false;
   bool _isNearBottom = true;
+  double _soundLevel = 0.0;
   int _speechRestartAttempts = 0;
   String _speechBaseText = '';
   String _speechDraft = '';
@@ -132,6 +133,13 @@ class _ChatScreenState extends State<ChatScreen> {
             );
           });
         },
+        onSoundLevelChange: (level) {
+          if (mounted && _voiceActive) {
+            setState(() {
+              _soundLevel = level;
+            });
+          }
+        },
         listenOptions: stt.SpeechListenOptions(
           partialResults: true,
           listenMode: stt.ListenMode.dictation,
@@ -187,8 +195,9 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _voiceActive = true;
       _showSpeechError = false;
+      _soundLevel = 0.0;
     });
-    HapticFeedback.selectionClick();
+    HapticFeedback.mediumImpact();
     await _startSpeechSession();
   }
 
@@ -196,12 +205,30 @@ class _ChatScreenState extends State<ChatScreen> {
     _voiceActive = false;
     _restartTimer?.cancel();
     _commitSpeechDraft();
+    _soundLevel = 0.0;
     if (mounted) setState(() {});
+    HapticFeedback.lightImpact();
     try {
       await _speech.stop();
     } catch (_) {
       // The speech service may already have ended its session.
     }
+  }
+
+  Future<void> _cancelVoice() async {
+    _voiceActive = false;
+    _restartTimer?.cancel();
+    _speechDraft = '';
+    _soundLevel = 0.0;
+    _inputController.value = TextEditingValue(
+      text: _speechBaseText,
+      selection: TextSelection.collapsed(offset: _speechBaseText.length),
+    );
+    if (mounted) setState(() {});
+    HapticFeedback.lightImpact();
+    try {
+      await _speech.cancel();
+    } catch (_) {}
   }
 
   void _send() {
@@ -249,6 +276,32 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) _showMessage('设置已保存');
   }
 
+  void _confirmNewChat(ChatController chat) {
+    if (chat.messages.isEmpty) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('开启新对话？'),
+        content: const Text('当前对话内容将被清空，确认开启新对话吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              chat.clearConversation();
+              _inputController.clear();
+            },
+            style: FilledButton.styleFrom(backgroundColor: _green),
+            child: const Text('清空'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -287,12 +340,7 @@ class _ChatScreenState extends State<ChatScreen> {
         actions: [
           IconButton(
             tooltip: '新对话',
-            onPressed: chat.isBusy
-                ? null
-                : () {
-                    chat.clearConversation();
-                    _inputController.clear();
-                  },
+            onPressed: chat.isBusy ? null : () => _confirmNewChat(chat),
             icon: const Icon(Icons.add_comment_outlined),
           ),
           IconButton(
@@ -303,58 +351,150 @@ class _ChatScreenState extends State<ChatScreen> {
           const SizedBox(width: 6),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Expanded(
-            child: chat.messages.isEmpty
-                ? _WelcomeView(onSuggestion: (text) {
-                    _inputController.text = text;
-                    _inputFocus.requestFocus();
-                  })
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-                    itemCount: chat.messages.length,
-                    itemBuilder: (context, index) => _MessageBubble(
-                      message: chat.messages[index],
+          Column(
+            children: [
+              Expanded(
+                child: chat.messages.isEmpty
+                    ? _WelcomeView(onSuggestion: (text) {
+                        _inputController.text = text;
+                        _inputFocus.requestFocus();
+                      })
+                    : ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+                        itemCount: chat.messages.length,
+                        itemBuilder: (context, index) => _MessageBubble(
+                          key: ValueKey(chat.messages[index].id),
+                          message: chat.messages[index],
+                          isLast: index == chat.messages.length - 1,
+                        ),
+                      ),
+              ),
+              if (_voiceActive || _showSpeechError)
+                Container(
+                  margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _showSpeechError
+                        ? Colors.deepOrange.withValues(alpha: 0.1)
+                        : _green.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: _showSpeechError
+                          ? Colors.deepOrange.withValues(alpha: 0.3)
+                          : _green.withValues(alpha: 0.3),
                     ),
                   ),
-          ),
-          if (_voiceActive || _showSpeechError)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-              child: Row(
-                children: [
-                  Icon(
-                    _showSpeechError ? Icons.error_outline : Icons.graphic_eq,
-                    size: 16,
-                    color: _showSpeechError ? Colors.deepOrange : _green,
+                  child: Row(
+                    children: [
+                      Icon(
+                        _showSpeechError ? Icons.error_outline : Icons.graphic_eq_rounded,
+                        size: 18,
+                        color: _showSpeechError ? Colors.deepOrange : _green,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _showSpeechError
+                              ? '语音中断，正在重连…'
+                              : '正在听你说…',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _showSpeechError
+                                ? Colors.deepOrange
+                                : (_isDark(context) ? Colors.white70 : Colors.black87),
+                          ),
+                        ),
+                      ),
+                      if (_voiceActive) ...[
+                        TextButton(
+                          onPressed: _cancelVoice,
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                          ),
+                          child: const Text('取消', style: TextStyle(color: Colors.red, fontSize: 12)),
+                        ),
+                        FilledButton(
+                          onPressed: _stopVoice,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _green,
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                          ),
+                          child: const Text('完成', style: TextStyle(fontSize: 12)),
+                        ),
+                      ],
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _showSpeechError
-                          ? '语音识别暂时中断，正在尝试恢复…'
-                          : '正在聆听 · 停顿后会自动续听，点麦克风结束',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: _showSpeechError ? Colors.deepOrange : null,
+                ),
+              _Composer(
+                controller: _inputController,
+                focusNode: _inputFocus,
+                voiceActive: _voiceActive,
+                speechAvailable: _speechAvailable,
+                soundLevel: _soundLevel,
+                isBusy: chat.isBusy,
+                onVoiceTap: _toggleVoice,
+                onSend: _send,
+                onStop: chat.cancelStream,
+              ),
+            ],
+          ),
+          if (!_isNearBottom && chat.messages.isNotEmpty)
+            Positioned(
+              right: 18,
+              bottom: (_voiceActive || _showSpeechError) ? 140 : 88,
+              child: Material(
+                elevation: 4,
+                shadowColor: Colors.black26,
+                shape: const CircleBorder(),
+                color: _isDark(context) ? _darkSurface : Colors.white,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () {
+                    _isNearBottom = true;
+                    _scrollToBottom(force: true, animate: true);
+                    setState(() {});
+                  },
+                  child: Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: _isDark(context) ? _darkBorder : _lightBorder,
                       ),
                     ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                          color: _isDark(context) ? Colors.white70 : Colors.black87,
+                          size: 22,
+                        ),
+                        if (chat.isBusy)
+                          Positioned(
+                            top: 6,
+                            right: 6,
+                            child: Container(
+                              width: 7,
+                              height: 7,
+                              decoration: const BoxDecoration(
+                                color: _green,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-                ],
+                ),
               ),
             ),
-          _Composer(
-            controller: _inputController,
-            focusNode: _inputFocus,
-            voiceActive: _voiceActive,
-            speechAvailable: _speechAvailable,
-            isBusy: chat.isBusy,
-            onVoiceTap: _toggleVoice,
-            onSend: _send,
-            onStop: chat.cancelStream,
-          ),
         ],
       ),
     );
@@ -428,7 +568,16 @@ class _WelcomeView extends StatelessWidget {
                           borderRadius: BorderRadius.circular(16),
                           border: cardBorder,
                         ),
-                        child: Text(suggestion),
+                        child: Row(
+                          children: [
+                            Expanded(child: Text(suggestion)),
+                            Icon(
+                              Icons.arrow_forward_rounded,
+                              size: 16,
+                              color: dark ? Colors.white38 : Colors.black38,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -443,26 +592,45 @@ class _WelcomeView extends StatelessWidget {
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message});
+  const _MessageBubble({
+    super.key,
+    required this.message,
+    required this.isLast,
+  });
 
   final ChatMessage message;
+  final bool isLast;
 
   @override
   Widget build(BuildContext context) {
     final isUser = message.role == ChatRole.user;
     final dark = _isDark(context);
+
     if (!isUser && message.content.isEmpty && message.isStreaming) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16),
+        padding: const EdgeInsets.symmetric(vertical: 14),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            const SizedBox(
-              width: 17,
-              height: 17,
-              child: CircularProgressIndicator(strokeWidth: 2, color: _green),
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: _green.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.auto_awesome, color: _green, size: 15),
             ),
             const SizedBox(width: 12),
-            Text('正在思考…', style: TextStyle(color: dark ? Colors.white54 : Colors.black54)),
+            const _ThinkingDots(),
+            const SizedBox(width: 10),
+            Text(
+              '正在思考…',
+              style: TextStyle(
+                color: dark ? Colors.white54 : Colors.black54,
+                fontSize: 13,
+              ),
+            ),
           ],
         ),
       );
@@ -471,69 +639,142 @@ class _MessageBubble extends StatelessWidget {
     final userBg = dark ? _darkUserBubble : _lightUserBubble;
     final codeBg = dark ? _darkCodeBg : _lightCodeBg;
 
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.sizeOf(context).width * (isUser ? 0.84 : 0.96),
+    if (isUser) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: GestureDetector(
+          onLongPress: () {
+            Clipboard.setData(ClipboardData(text: message.content));
+            HapticFeedback.lightImpact();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('已复制提问内容'),
+                duration: Duration(seconds: 1),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          },
+          child: Container(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.sizeOf(context).width * 0.84,
+            ),
+            margin: const EdgeInsets.symmetric(vertical: 7),
+            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
+            decoration: BoxDecoration(
+              color: userBg,
+              borderRadius: BorderRadius.circular(19),
+            ),
+            child: SelectableText(
+              message.content,
+              style: TextStyle(
+                fontSize: 15,
+                height: 1.48,
+                color: dark ? Colors.white : null,
+              ),
+            ),
+          ),
         ),
-        margin: const EdgeInsets.symmetric(vertical: 7),
-        padding: EdgeInsets.symmetric(
-          horizontal: isUser ? 15 : 2,
-          vertical: isUser ? 11 : 5,
-        ),
-        decoration: isUser
-            ? BoxDecoration(
-                color: userBg,
-                borderRadius: BorderRadius.circular(19),
-              )
-            : null,
-        child: isUser
-            ? SelectableText(
-                message.content,
-                style: TextStyle(fontSize: 15, height: 1.48, color: dark ? Colors.white : null),
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  MarkdownBody(
-                    data: message.content,
-                    selectable: true,
-                    styleSheet: MarkdownStyleSheet(
-                      p: TextStyle(
-                        color: message.isError
-                            ? (dark ? Colors.red.shade300 : Colors.red.shade700)
-                            : null,
-                        fontSize: 15,
-                        height: 1.58,
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            margin: const EdgeInsets.only(top: 2, right: 10),
+            decoration: BoxDecoration(
+              color: _green.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.auto_awesome, color: _green, size: 15),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                MarkdownBody(
+                  data: message.content,
+                  selectable: true,
+                  onTapLink: (text, href, title) {
+                    if (href != null && href.isNotEmpty) {
+                      Clipboard.setData(ClipboardData(text: href));
+                      HapticFeedback.lightImpact();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('已复制链接: $href'),
+                          duration: const Duration(seconds: 2),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  },
+                  styleSheet: MarkdownStyleSheet(
+                    p: TextStyle(
+                      color: message.isError
+                          ? (dark ? Colors.red.shade300 : Colors.red.shade700)
+                          : null,
+                      fontSize: 15,
+                      height: 1.58,
+                    ),
+                    code: TextStyle(
+                      fontFamily: 'monospace',
+                      backgroundColor: codeBg,
+                      color: dark ? Colors.green.shade200 : null,
+                    ),
+                    codeblockDecoration: BoxDecoration(
+                      color: codeBg,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: dark ? _darkBorder : _lightBorder,
+                        width: 0.5,
                       ),
-                      code: TextStyle(
-                        fontFamily: 'monospace',
-                        backgroundColor: codeBg,
-                        color: dark ? Colors.green.shade200 : null,
-                      ),
-                      codeblockDecoration: BoxDecoration(
-                        color: codeBg,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: dark ? _darkBorder : _lightBorder, width: 0.5),
-                      ),
-                      blockquoteDecoration: const BoxDecoration(
-                        border: Border(left: BorderSide(color: _green, width: 3)),
-                      ),
+                    ),
+                    blockquoteDecoration: const BoxDecoration(
+                      border: Border(left: BorderSide(color: _green, width: 3)),
                     ),
                   ),
-                  if (message.isStreaming)
-                    Container(
-                      width: 7,
-                      height: 16,
-                      margin: const EdgeInsets.only(top: 4),
-                      decoration: BoxDecoration(
-                        color: _green,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
+                ),
+                if (message.isStreaming) const _BlinkingCursor(),
+                if (!message.isStreaming && message.content.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Row(
+                      children: [
+                        _ActionButton(
+                          icon: Icons.copy_rounded,
+                          tooltip: '复制回复',
+                          onPressed: () {
+                            Clipboard.setData(ClipboardData(text: message.content));
+                            HapticFeedback.lightImpact();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('已复制到剪贴板'),
+                                duration: Duration(seconds: 1),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          },
+                        ),
+                        if (isLast)
+                          _ActionButton(
+                            icon: Icons.refresh_rounded,
+                            tooltip: '重新生成',
+                            onPressed: () {
+                              HapticFeedback.lightImpact();
+                              context.read<ChatController>().retryLast();
+                            },
+                          ),
+                      ],
                     ),
-                ],
-              ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -545,6 +786,7 @@ class _Composer extends StatelessWidget {
     required this.focusNode,
     required this.voiceActive,
     required this.speechAvailable,
+    required this.soundLevel,
     required this.isBusy,
     required this.onVoiceTap,
     required this.onSend,
@@ -555,6 +797,7 @@ class _Composer extends StatelessWidget {
   final FocusNode focusNode;
   final bool voiceActive;
   final bool speechAvailable;
+  final double soundLevel;
   final bool isBusy;
   final VoidCallback onVoiceTap;
   final VoidCallback onSend;
@@ -608,6 +851,7 @@ class _Composer extends StatelessWidget {
                     _VoiceButton(
                       active: voiceActive,
                       enabled: speechAvailable || voiceActive,
+                      soundLevel: soundLevel,
                       onTap: onVoiceTap,
                     ),
                     const SizedBox(width: 5),
@@ -636,38 +880,56 @@ class _VoiceButton extends StatelessWidget {
   const _VoiceButton({
     required this.active,
     required this.enabled,
+    required this.soundLevel,
     required this.onTap,
   });
 
   final bool active;
   final bool enabled;
+  final double soundLevel;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final dark = _isDark(context);
+    final normalized = active ? (soundLevel.clamp(0.0, 10.0) / 10.0) : 0.0;
     return Semantics(
       button: true,
       label: active ? '停止语音输入' : '开始语音输入',
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-        decoration: BoxDecoration(
-          color: active ? const Color(0xFFFFE9E8) : Colors.transparent,
-          shape: BoxShape.circle,
-        ),
-        child: IconButton(
-          tooltip: active ? '停止语音输入' : '语音输入',
-          onPressed: enabled ? onTap : null,
-          icon: AnimatedScale(
-            scale: active ? 1.12 : 1,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (active)
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 80),
+              width: 38 + (normalized * 14),
+              height: 38 + (normalized * 14),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFFE5484D).withValues(alpha: 0.12 + (normalized * 0.2)),
+              ),
+            ),
+          AnimatedContainer(
             duration: const Duration(milliseconds: 220),
-            child: Icon(
-              active ? Icons.mic_rounded : Icons.mic_none_rounded,
-              color: active ? const Color(0xFFE5484D) : (dark ? Colors.white54 : Colors.black54),
+            curve: Curves.easeOut,
+            decoration: BoxDecoration(
+              color: active ? const Color(0xFFFFE9E8) : Colors.transparent,
+              shape: BoxShape.circle,
+            ),
+            child: IconButton(
+              tooltip: active ? '停止语音输入' : '语音输入',
+              onPressed: enabled ? onTap : null,
+              icon: AnimatedScale(
+                scale: active ? 1.12 : 1,
+                duration: const Duration(milliseconds: 220),
+                child: Icon(
+                  active ? Icons.mic_rounded : Icons.mic_none_rounded,
+                  color: active ? const Color(0xFFE5484D) : (dark ? Colors.white54 : Colors.black54),
+                ),
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -720,6 +982,122 @@ class _StopButton extends StatelessWidget {
   }
 }
 
+class _ThinkingDots extends StatefulWidget {
+  const _ThinkingDots();
+
+  @override
+  State<_ThinkingDots> createState() => _ThinkingDotsState();
+}
+
+class _ThinkingDotsState extends State<_ThinkingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1000),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(3, (index) {
+            final delay = index * 0.2;
+            final progress = (_controller.value - delay) % 1.0;
+            final offset = (progress < 0.5 ? progress * 2 : (1.0 - progress) * 2) * -3.5;
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 2.5),
+              transform: Matrix4.translationValues(0, offset, 0),
+              width: 5.5,
+              height: 5.5,
+              decoration: const BoxDecoration(
+                color: _green,
+                shape: BoxShape.circle,
+              ),
+            );
+          }),
+        );
+      },
+    );
+  }
+}
+
+class _BlinkingCursor extends StatefulWidget {
+  const _BlinkingCursor();
+
+  @override
+  State<_BlinkingCursor> createState() => _BlinkingCursorState();
+}
+
+class _BlinkingCursorState extends State<_BlinkingCursor>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 550),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _controller,
+      child: Container(
+        width: 7,
+        height: 16,
+        margin: const EdgeInsets.only(top: 4, left: 2),
+        decoration: BoxDecoration(
+          color: _green,
+          borderRadius: BorderRadius.circular(3),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = _isDark(context);
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: IconButton(
+        iconSize: 16,
+        padding: const EdgeInsets.all(6),
+        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+        tooltip: tooltip,
+        onPressed: onPressed,
+        icon: Icon(
+          icon,
+          color: dark ? Colors.white38 : Colors.black38,
+        ),
+      ),
+    );
+  }
+}
+
 class SettingsSheet extends StatefulWidget {
   const SettingsSheet({super.key, required this.settings});
 
@@ -733,14 +1111,24 @@ class _SettingsSheetState extends State<SettingsSheet> {
   late final _baseUrlController = TextEditingController(text: widget.settings.baseUrl);
   late final _apiKeyController = TextEditingController(text: widget.settings.apiKey);
   late final _modelController = TextEditingController(text: widget.settings.model);
+  late final _systemPromptController = TextEditingController(text: widget.settings.systemPrompt);
   bool _hideKey = true;
   late int _themeMode = widget.settings.themeMode;
+
+  static const _modelPresets = [
+    'gpt-4o-mini',
+    'gpt-4o',
+    'deepseek-chat',
+    'qwen-plus',
+    'claude-3-5-sonnet',
+  ];
 
   @override
   void dispose() {
     _baseUrlController.dispose();
     _apiKeyController.dispose();
     _modelController.dispose();
+    _systemPromptController.dispose();
     super.dispose();
   }
 
@@ -758,6 +1146,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
       apiKey: _apiKeyController.text.trim(),
       model: model,
       themeMode: _themeMode,
+      systemPrompt: _systemPromptController.text.trim(),
     ));
   }
 
@@ -845,6 +1234,33 @@ class _SettingsSheetState extends State<SettingsSheet> {
                   labelText: '模型',
                   hintText: 'gpt-4o-mini',
                   prefixIcon: Icon(Icons.smart_toy_outlined),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: _modelPresets.map((preset) {
+                  return ActionChip(
+                    label: Text(preset, style: const TextStyle(fontSize: 11)),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () {
+                      setState(() {
+                        _modelController.text = preset;
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 13),
+              TextField(
+                controller: _systemPromptController,
+                maxLines: 2,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: '系统提示词 (可选)',
+                  hintText: '如：你是一个专业、简洁的 AI 助手',
+                  prefixIcon: Icon(Icons.psychology_outlined),
                 ),
               ),
               const SizedBox(height: 20),

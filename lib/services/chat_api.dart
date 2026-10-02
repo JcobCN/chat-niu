@@ -37,6 +37,15 @@ class ChatApi {
 
     final client = http.Client();
     try {
+      final apiMessages = <Map<String, String>>[];
+      if (settings.systemPrompt.trim().isNotEmpty) {
+        apiMessages.add({
+          'role': 'system',
+          'content': settings.systemPrompt.trim(),
+        });
+      }
+      apiMessages.addAll(messages.map((message) => message.toApiJson()));
+
       final request = http.Request('POST', uri)
         ..headers.addAll({
           'Authorization': 'Bearer $apiKey',
@@ -46,11 +55,11 @@ class ChatApi {
         ..body = jsonEncode({
           'model': settings.model.trim(),
           'stream': true,
-          'messages': messages.map((message) => message.toApiJson()).toList(),
+          'messages': apiMessages,
         });
 
       final response = await client.send(request).timeout(
-        const Duration(seconds: 45),
+        const Duration(seconds: 60),
         onTimeout: () => throw const ChatApiException('连接超时，请检查网络或 API 地址。'),
       );
 

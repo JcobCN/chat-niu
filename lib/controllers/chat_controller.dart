@@ -30,6 +30,40 @@ class ChatController extends ChangeNotifier {
     _stopRequested = true;
   }
 
+  Future<void> retryLast() async {
+    if (_isBusy || _messages.isEmpty) return;
+
+    int lastAssistantIndex = -1;
+    for (int i = _messages.length - 1; i >= 0; i--) {
+      if (_messages[i].role == ChatRole.assistant) {
+        lastAssistantIndex = i;
+        break;
+      }
+    }
+    if (lastAssistantIndex == -1) return;
+
+    _messages.removeRange(lastAssistantIndex, _messages.length);
+
+    final conversation = _messages
+        .where((message) => !message.isError && message.content.isNotEmpty)
+        .toList();
+    if (conversation.isEmpty) return;
+
+    final assistantId = '${DateTime.now().microsecondsSinceEpoch}-assistant';
+    _messages.add(ChatMessage(
+      id: assistantId,
+      role: ChatRole.assistant,
+      content: '',
+      createdAt: DateTime.now(),
+      isStreaming: true,
+    ));
+    _isBusy = true;
+    _stopRequested = false;
+    notifyListeners();
+
+    await _executeStream(conversation, assistantId);
+  }
+
   Future<void> sendMessage(String text) async {
     final prompt = text.trim();
     if (prompt.isEmpty || _isBusy) return;
@@ -59,6 +93,13 @@ class ChatController extends ChangeNotifier {
     _isBusy = true;
     notifyListeners();
 
+    await _executeStream(conversation, assistantId);
+  }
+
+  Future<void> _executeStream(
+    List<ChatMessage> conversation,
+    String assistantId,
+  ) async {
     try {
       await _api.streamReply(
         settings: _settings,
